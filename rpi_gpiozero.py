@@ -7,7 +7,7 @@ import logging
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP)
 
-REQUIREMENTS = ['gpiozero==1.4.0', 'pigpio==1.38']
+REQUIREMENTS = ['gpiozero==1.4.0', 'pigpio==1.38', 'RPi.GPIO==0.6.1']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ DOMAIN = 'rpi_gpiozero'
 
 _DEVICES = set()
 _REMOTE_FACTORY = {}
+_LOCAL_FACTORY = None
 
 # pylint: disable=no-member
 def setup(hass, config):
@@ -42,27 +43,81 @@ def setup(hass, config):
     hass.bus.listen_once(EVENT_HOMEASSISTANT_START, prepare_gpiozero)
     return True
 
-def get_pinfactory(hostport=None):
+def close_remote_pinfactory(hostport):
+    global _REMOTE_FACTORY
+
+    _LOGGER.info("closing pin_factory for %s", hostport)
+    # Remove the pin_factory from our stored list
+    pin_factory = _REMOTE_FACTORY.pop(hostport, None)
+    if not pin_factory:
+        return
+
+    # Close and remove all devices associated with this pin factory
+    for dev in list(_DEVICES):
+        if dev.pin_factory == pin_factory:
+            try:
+                dev.close()
+            except:
+                _LOGGER.exception("error closing device")
+
+            _DEVICES.remove(dev)
+
+    # Close the pin_factory itself
+    try:
+        pin_factory.close()
+    except:
+        _LOGGER.exception("error closing pin factory")
+
+def get_remote_pinfactory(hostport, timeout=1):
+    global _REMOTE_FACTORY
+
+    pin_factory = _REMOTE_FACTORY.get(hostport)
+
+    if pin_factory:
+        try:
+            tick = pin_factory._connection.get_current_tick()
+            _LOGGER.info("checked pin_factory for %s : %s", hostport, tick)
+        except Exception as e:
+            _LOGGER.error("error checking pin_factory for %s due to",
+                    hostport, e)
+            close_remote_pinfactory(hostport)
+            pin_factory = None
+
+    return pin_factory
+
+def get_pinfactory(hostport=None, timeout=1):
     """
     Get the pinfactory for the configured hostport.
 
     :param hostport: the host/port tuple, when None local GPIO is used
     """
+    global _LOCAL_FACTORY, _REMOTE_FACTORY
 
     # TODO do we need any thread safety here?
-    if hostport:
+    pin_factory = None
+
+    if hostport and hostport[0]:
         from gpiozero.pins.pigpio import PiGPIOFactory
-        if hostport not in _REMOTE_FACTORY:
+        pin_factory = get_remote_pinfactory(hostport, timeout)
+        # if we don't have a pin_factory, create a new one
+        if pin_factory == None:
             _LOGGER.info(
                 "Creating pigpiod connection to %s:%s",
                 hostport[0],
                 hostport[1]
             )
-            _REMOTE_FACTORY[hostport] = PiGPIOFactory(
-                host=hostport[0],
-                port=hostport[1]
-            )
-        pin_factory = _REMOTE_FACTORY[hostport]
+
+            try:
+                pin_factory = PiGPIOFactory(
+                    host=hostport[0],
+                    port=hostport[1]
+                )
+                # We set a timeout so that we can determine if the connection dies
+                pin_factory._connection.sl.s.settimeout(timeout)
+                _REMOTE_FACTORY[hostport] = pin_factory
+            except IOError as e:
+                _LOGGER.error("error connecting to pigpio due to: %s", e)
+                pin_factory = None
     else:
         from gpiozero.pins.rpigpio import RPiGPIOFactory
         if _LOCAL_FACTORY == None:
@@ -87,11 +142,15 @@ def setup_button(port, pull_mode, bouncetime, hostport):
     if bouncetime < 0:
         raise ValueError("invalid bouncetime %s", bouncetime)
 
+    pin_factory = get_pinfactory(hostport)
+    if pin_factory == None:
+        return None
+
     btn = Button(
         port,
         pull_up=(pull_mode.upper() == 'UP'),
         bounce_time=float(bouncetime) / 1e3, 
-        pin_factory=get_pinfactory(hostport)
+        pin_factory=pin_factory
     )
 
     # add the button to the _DEVICES list so we can cleanup on shutdown

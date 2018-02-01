@@ -1,10 +1,23 @@
 """
-Support for binary sensor using RPi GPIO.
+Support for binary sensor using the RPi GPIO Zero library.
+
+This component can interact with both local GPIO pins and remote GPIO pins (via
+(pigpio)[http://abyz.me.uk/rpi/pigpio].  Local pin configuration is identical
+to the standard rpi_gpio component.  To connect to a remote `pigpio` daemon
+use the `host` and `port` options, for example:
+
+    binary_sensor:
+      - platform: rpi_gpiozero
+        host: 192.168.1.254
+        ports:
+          18: Front Door
+          19: Rear Door
 
 For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/binary_sensor.rpi_gpio/
+https://home-assistant.io/components/binary_sensor.rpi_gpiozero/
 """
 import logging
+import threading
 
 import voluptuous as vol
 
@@ -26,7 +39,7 @@ CONF_PORT = 'port'
 DEFAULT_BOUNCETIME = 50
 DEFAULT_INVERT_LOGIC = False
 DEFAULT_PULL_MODE = 'UP'
-DEFAULT_HOST = None
+DEFAULT_HOST = ''
 DEFAULT_PORT = 8888 
 
 DEPENDENCIES = ['rpi_gpiozero']
@@ -82,28 +95,49 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
         self._invert_logic = invert_logic
         self._hostport = hostport
         self._state = None
+        self._btn = None
+        self._btn_lock = threading.Lock()
 
-        _LOGGER.debug("creating button %s on port %s", self._name, self._port)
-        self._btn = rpi_gpiozero.setup_button(
-            self._port,
-            self._pull_mode,
-            self._bouncetime,
-            self._hostport
-        )
+    @property
+    def btn(self):
+        self._btn_lock.acquire()
+        try:
+            if self._btn == None and self._hostport:
 
-        def on_change(device):
-            """Read state from GPIO."""
-            self._state = device.is_pressed
-            _LOGGER.info("%s has changed to %s", self._name, self._state)
-            self.schedule_update_ha_state()
+                _LOGGER.debug("creating button %s on port %s",
+                        self._name, self._port)
+                self._btn = rpi_gpiozero.setup_button(
+                    self._port,
+                    self._pull_mode,
+                    self._bouncetime,
+                    self._hostport
+                )
 
-        self._btn.when_pressed = on_change
-        self._btn.when_released = on_change
+                if self._btn == None:
+                    _LOGGER.error("failed to create button %s on port %s",
+                            self._name, self._port)
+                else:
+                    def on_change(device):
+                        """Read state from GPIO."""
+                        self._state = device.is_pressed
+                        _LOGGER.info("%s has changed to %s",
+                                self._name, self._state)
+                        self.schedule_update_ha_state()
+
+                    self._btn.when_pressed = on_change
+                    self._btn.when_released = on_change
+        finally:
+            self._btn_lock.release()
+
+        return self._btn
 
     @property
     def should_poll(self):
-        """No polling needed."""
-        return False
+        """
+        Polling isn't required for state changes, but it useful for tracking
+        and restoring connectivity
+        """
+        return True
 
     @property
     def name(self):
@@ -115,8 +149,31 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
         """Return the state of the entity."""
         return self._state != self._invert_logic
 
+    @property
+    def available(self):
+        return self.btn != None
+
+    def _reset(self):
+        self._btn = None
+        return self.btn
+
     def update(self):
         """Update the GPIO state."""
-        self._state = self._btn.is_pressed
-        _LOGGER.info("%s has beened updated to state %s",
-            self._name, self._state)
+        _LOGGER.info("Updating %s", self._name)
+        if self.btn:
+            try:
+                if self.btn.closed:
+                    _LOGGER.exception("%s has been closed", self._name)
+                    self._reset()
+                else:
+                    self._state = self.btn.is_pressed
+            except:
+                # If there are any errors during checking is_pressed
+                # reset the _btn
+                _LOGGER.exception("%s has failed to update", self._name)
+                self._reset()
+        else:
+            self._state = False # if would be preferable to use None here
+
+        _LOGGER.info("%s has been updated to state %s",
+                self._name, self._state)

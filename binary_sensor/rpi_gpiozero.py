@@ -40,7 +40,7 @@ DEFAULT_BOUNCETIME = 50
 DEFAULT_INVERT_LOGIC = False
 DEFAULT_PULL_MODE = 'UP'
 DEFAULT_HOST = ''
-DEFAULT_PORT = 8888 
+DEFAULT_PORT = 8888
 
 DEPENDENCIES = ['rpi_gpiozero']
 
@@ -85,7 +85,7 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
     """Represent a binary sensor that uses Raspberry Pi GPIO via gpiozero"""
 
     def __init__(self, name, port, pull_mode, bouncetime, invert_logic,
-            hostport):
+                 hostport):
         """Initialize the RPi gpiozero binary sensor."""
         # pylint: disable=no-member
         self._name = name or DEVICE_DEFAULT_NAME
@@ -102,10 +102,10 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
     def btn(self):
         self._btn_lock.acquire()
         try:
-            if self._btn == None and self._hostport:
+            if self._btn is None and self._hostport:
 
                 _LOGGER.debug("creating button %s on port %s",
-                        self._name, self._port)
+                              self._name, self._port)
                 self._btn = rpi_gpiozero.setup_button(
                     self._port,
                     self._pull_mode,
@@ -113,15 +113,15 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
                     self._hostport
                 )
 
-                if self._btn == None:
+                if self._btn is None:
                     _LOGGER.error("failed to create button %s on port %s",
-                            self._name, self._port)
+                                  self._name, self._port)
                 else:
                     def on_change(device):
                         """Read state from GPIO."""
                         self._state = device.is_pressed
                         _LOGGER.info("%s has changed to %s",
-                                self._name, self._state)
+                                     self._name, self._state)
                         self.schedule_update_ha_state()
 
                     self._btn.when_pressed = on_change
@@ -151,7 +151,7 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
 
     @property
     def available(self):
-        return self.btn != None
+        return self.btn is not None
 
     def _reset(self):
         self._btn = None
@@ -173,7 +173,7 @@ class RPiGPIOZeroBinarySensor(BinarySensorDevice):
                 _LOGGER.exception("%s has failed to update", self._name)
                 self._reset()
         else:
-            self._state = False # if would be preferable to use None here
+            self._state = False
 
         _LOGGER.info("%s has been updated to state %s",
-                self._name, self._state)
+                     self._name, self._state)

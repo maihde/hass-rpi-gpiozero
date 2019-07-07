@@ -13,6 +13,8 @@ ha_release: pre 0.7
 ha_iot_class: "Local Push"
 ---
 
+IMPORTANT: THIS COMPONENT IS NO LONGER NECESSARY.  THE BUILT-IN [remote_rpi_gpio](https://www.home-assistant.io/components/remote_rpi_gpio/) COMPONENT provides the same functionality.
+
 The `rpi_gpiozero` binary sensor platform allows you to read sensor values of
 the GPIOs of both local and remote GPIOs of your
 [Raspberry Pis](https://www.raspberrypi.org/).
